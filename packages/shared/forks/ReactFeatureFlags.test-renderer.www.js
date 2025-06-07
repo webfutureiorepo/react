@@ -70,8 +70,7 @@ export const disableDefaultPropsExceptForClasses = true;
 export const renameElementSymbol = false;
 
 export const enableObjectFiber = false;
-export const enableShallowPropDiffing = false;
-export const enableEagerAlternateStateNodeCleanup = false;
+export const enableEagerAlternateStateNodeCleanup = true;
 
 export const enableHydrationLaneScheduling = true;
 
@@ -80,10 +79,10 @@ export const enableYieldingBeforePassive = false;
 export const enableThrottledScheduling = false;
 export const enableViewTransition = false;
 export const enableGestureTransition = false;
-export const enableFastAddPropertiesInDiffing = false;
 export const enableLazyPublicInstanceInFabric = false;
 export const enableScrollEndPolyfill = true;
 export const enableSuspenseyImages = false;
+export const enableFizzBlockingRender = true;
 export const enableSrcObject = false;
 export const enableHydrationChangeEvent = false;
 export const enableDefaultTransitionIndicator = false;
