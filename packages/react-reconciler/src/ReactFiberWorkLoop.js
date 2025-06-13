@@ -52,10 +52,13 @@ import {
   enableThrottledScheduling,
   enableViewTransition,
   enableGestureTransition,
+  enableDefaultTransitionIndicator,
 } from 'shared/ReactFeatureFlags';
 import {resetOwnerStackLimit} from 'shared/ReactOwnerStackReset';
 import ReactSharedInternals from 'shared/ReactSharedInternals';
 import is from 'shared/objectIs';
+
+import reportGlobalError from 'shared/reportGlobalError';
 
 import {
   // Aliased because `act` will override and push to an internal queue
@@ -356,7 +359,6 @@ import {
   requestTransitionLane,
 } from './ReactFiberRootScheduler';
 import {getMaskedContext, getUnmaskedContext} from './ReactFiberContext';
-import {peekEntangledActionLane} from './ReactFiberAsyncAction';
 import {logUncaughtError} from './ReactFiberErrorLogger';
 import {
   deleteScheduledGesture,
@@ -779,14 +781,7 @@ export function requestUpdateLane(fiber: Fiber): Lane {
       transition._updatedFibers.add(fiber);
     }
 
-    const actionScopeLane = peekEntangledActionLane();
-    return actionScopeLane !== NoLane
-      ? // We're inside an async action scope. Reuse the same lane.
-        actionScopeLane
-      : // We may or may not be inside an async action scope. If we are, this
-        // is the first update in that scope. Either way, we need to get a
-        // fresh transition lane.
-        requestTransitionLane(transition);
+    return requestTransitionLane(transition);
   }
 
   return eventPriorityToLane(resolveUpdatePriority());
@@ -913,7 +908,7 @@ export function scheduleUpdateOnFiber(
   markRootUpdated(root, lane);
 
   if (
-    (executionContext & RenderContext) !== NoLanes &&
+    (executionContext & RenderContext) !== NoContext &&
     root === workInProgressRoot
   ) {
     // This update was dispatched during the render phase. This is a mistake
@@ -3601,6 +3596,33 @@ function flushLayoutEffects(): void {
   const finishedWork = pendingFinishedWork;
   const lanes = pendingEffectsLanes;
 
+  if (enableDefaultTransitionIndicator) {
+    const cleanUpIndicator = root.pendingIndicator;
+    if (cleanUpIndicator !== null && root.indicatorLanes === NoLanes) {
+      // We have now committed all Transitions that needed the default indicator
+      // so we can now run the clean up function. We do this in the layout phase
+      // so it has the same semantics as if you did it with a useLayoutEffect or
+      // if it was reset automatically with useOptimistic.
+      const prevTransition = ReactSharedInternals.T;
+      ReactSharedInternals.T = null;
+      const previousPriority = getCurrentUpdatePriority();
+      setCurrentUpdatePriority(DiscreteEventPriority);
+      const prevExecutionContext = executionContext;
+      executionContext |= CommitContext;
+      root.pendingIndicator = null;
+      try {
+        cleanUpIndicator();
+      } catch (x) {
+        reportGlobalError(x);
+      } finally {
+        // Reset the priority to the previous non-sync value.
+        executionContext = prevExecutionContext;
+        setCurrentUpdatePriority(previousPriority);
+        ReactSharedInternals.T = prevTransition;
+      }
+    }
+  }
+
   const subtreeHasLayoutEffects =
     (finishedWork.subtreeFlags & LayoutMask) !== NoFlags;
   const rootHasLayoutEffect = (finishedWork.flags & LayoutMask) !== NoFlags;
@@ -4780,7 +4802,7 @@ export function warnAboutUpdateOnNotYetMountedFiberInDEV(fiber: Fiber) {
       console.error(
         "Can't perform a React state update on a component that hasn't mounted yet. " +
           'This indicates that you have a side-effect in your render function that ' +
-          'asynchronously later calls tries to update the component. Move this work to ' +
+          'asynchronously tries to update the component. Move this work to ' +
           'useEffect instead.',
       );
     });

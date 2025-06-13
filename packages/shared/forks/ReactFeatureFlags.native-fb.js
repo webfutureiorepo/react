@@ -23,10 +23,8 @@ export const {
   enableHiddenSubtreeInsertionEffectCleanup,
   enableObjectFiber,
   enablePersistedModeClonedFlag,
-  enableShallowPropDiffing,
   enableEagerAlternateStateNodeCleanup,
   passChildrenWhenCloningPersistedNodes,
-  enableFastAddPropertiesInDiffing,
   enableLazyPublicInstanceInFabric,
   renameElementSymbol,
   enableFragmentRefs,
@@ -60,7 +58,6 @@ export const enableProfilerCommitHooks = __PROFILE__;
 export const enableProfilerNestedUpdatePhase = __PROFILE__;
 export const enableProfilerTimer = __PROFILE__;
 export const enableReactTestRendererWarning = false;
-export const enableRenderableContext = true;
 export const enableRetryLaneExpiration = false;
 export const enableSchedulingProfiler = __PROFILE__;
 export const enableComponentPerformanceTrack = false;
@@ -83,6 +80,7 @@ export const enableViewTransition = false;
 export const enableGestureTransition = false;
 export const enableScrollEndPolyfill = true;
 export const enableSuspenseyImages = false;
+export const enableFizzBlockingRender = true;
 export const enableSrcObject = false;
 export const enableHydrationChangeEvent = true;
 export const enableDefaultTransitionIndicator = false;
