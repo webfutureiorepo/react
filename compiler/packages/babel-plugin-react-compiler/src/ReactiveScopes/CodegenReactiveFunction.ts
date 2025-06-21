@@ -44,7 +44,7 @@ import {
   getHookKind,
   makeIdentifierName,
 } from '../HIR/HIR';
-import {printIdentifier, printPlace} from '../HIR/PrintHIR';
+import {printIdentifier, printInstruction, printPlace} from '../HIR/PrintHIR';
 import {eachPatternOperand} from '../HIR/visitors';
 import {Err, Ok, Result} from '../Utils/Result';
 import {GuardKind} from '../Utils/RuntimeDiagnosticConstants';
@@ -1310,7 +1310,7 @@ function codegenInstructionNullable(
         });
         CompilerError.invariant(value?.type === 'FunctionExpression', {
           reason: 'Expected a function as a function declaration value',
-          description: null,
+          description: `Got ${value == null ? String(value) : value.type} at ${printInstruction(instr)}`,
           loc: instr.value.loc,
           suggestions: null,
         });
@@ -1726,7 +1726,7 @@ function codegenInstructionValue(
     }
     case 'UnaryExpression': {
       value = t.unaryExpression(
-        instrValue.operator as 'throw', // todo
+        instrValue.operator,
         codegenPlaceToExpression(cx, instrValue.value),
       );
       break;
@@ -2582,7 +2582,16 @@ function codegenValue(
   value: boolean | number | string | null | undefined,
 ): t.Expression {
   if (typeof value === 'number') {
-    return t.numericLiteral(value);
+    if (value < 0) {
+      /**
+       * Babel's code generator produces invalid JS for negative numbers when
+       * run with { compact: true }.
+       * See repro https://codesandbox.io/p/devbox/5d47fr
+       */
+      return t.unaryExpression('-', t.numericLiteral(-value), false);
+    } else {
+      return t.numericLiteral(value);
+    }
   } else if (typeof value === 'boolean') {
     return t.booleanLiteral(value);
   } else if (typeof value === 'string') {
