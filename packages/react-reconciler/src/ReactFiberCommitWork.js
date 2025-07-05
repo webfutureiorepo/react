@@ -20,6 +20,7 @@ import type {
 import type {Fiber, FiberRoot} from './ReactInternalTypes';
 import type {Lanes} from './ReactFiberLane';
 import {
+  includesLoadingIndicatorLanes,
   includesOnlySuspenseyCommitEligibleLanes,
   includesOnlyViewTransitionEligibleLanes,
 } from './ReactFiberLane';
@@ -60,6 +61,7 @@ import {
   enableViewTransition,
   enableFragmentRefs,
   enableEagerAlternateStateNodeCleanup,
+  enableDefaultTransitionIndicator,
 } from 'shared/ReactFeatureFlags';
 import {
   FunctionComponent,
@@ -141,6 +143,8 @@ import {
   logComponentUnmount,
   logComponentReappeared,
   logComponentDisappeared,
+  pushDeepEquality,
+  popDeepEquality,
 } from './ReactFiberPerformanceTrack';
 import {ConcurrentMode, NoMode, ProfileMode} from './ReactTypeOfMode';
 import {deferHiddenCallbacks} from './ReactFiberClassUpdateQueue';
@@ -208,6 +212,7 @@ import {
   TransitionRoot,
   TransitionTracingMarker,
 } from './ReactFiberTracingMarkerComponent';
+import {getViewTransitionClassName} from './ReactFiberViewTransitionComponent';
 import {
   commitHookLayoutEffects,
   commitHookLayoutUnmountEffects,
@@ -268,13 +273,16 @@ import {
 } from './ReactFiberCommitViewTransitions';
 import {
   viewTransitionMutationContext,
+  pushRootMutationContext,
   pushMutationContext,
   popMutationContext,
+  rootMutationContext,
 } from './ReactFiberMutationTracking';
 import {
   trackNamedViewTransition,
   untrackNamedViewTransition,
 } from './ReactFiberDuplicateViewTransitions';
+import {markIndicatorHandled} from './ReactFiberRootScheduler';
 
 // Used during the commit phase to track the state of the Offscreen component stack.
 // Allows us to avoid traversing the return path to find the nearest Offscreen ancestor.
@@ -298,7 +306,9 @@ export let shouldFireAfterActiveInstanceBlur: boolean = false;
 // Used during the commit phase to track whether a parent ViewTransition component
 // might have been affected by any mutations / relayouts below.
 let viewTransitionContextChanged: boolean = false;
+let inUpdateViewTransition: boolean = false;
 let rootViewTransitionAffected: boolean = false;
+let rootViewTransitionNameCanceled: boolean = false;
 
 function isHydratingParent(current: Fiber, finishedWork: Fiber): boolean {
   if (finishedWork.tag === ActivityComponent) {
@@ -1932,6 +1942,7 @@ export function commitMutationEffects(
   inProgressRoot = root;
 
   rootViewTransitionAffected = false;
+  inUpdateViewTransition = false;
 
   resetComponentEffectTimers();
 
@@ -2216,6 +2227,7 @@ function commitMutationEffectsOnFiber(
     case HostRoot: {
       const prevProfilerEffectDuration = pushNestedEffectDurations();
 
+      pushRootMutationContext();
       if (supportsResources) {
         prepareToCommitHoistables();
 
@@ -2265,6 +2277,18 @@ function commitMutationEffectsOnFiber(
         );
       }
 
+      popMutationContext(false);
+
+      if (
+        enableDefaultTransitionIndicator &&
+        rootMutationContext &&
+        includesLoadingIndicatorLanes(lanes)
+      ) {
+        // This root had a mutation. Mark this root as having rendered a manual
+        // loading state.
+        markIndicatorHandled(root);
+      }
+
       break;
     }
     case HostPortal: {
@@ -2281,7 +2305,7 @@ function commitMutationEffectsOnFiber(
         recursivelyTraverseMutationEffects(root, finishedWork, lanes);
         commitReconciliationEffects(finishedWork, lanes);
       }
-      if (viewTransitionMutationContext) {
+      if (viewTransitionMutationContext && inUpdateViewTransition) {
         // A Portal doesn't necessarily exist within the context of this subtree.
         // Ideally we would track which React ViewTransition component nests the container
         // but that's costly. Instead, we treat each Portal as if it's a new React root.
@@ -2516,11 +2540,16 @@ function commitMutationEffectsOnFiber(
           }
         }
         const prevMutationContext = pushMutationContext();
-        recursivelyTraverseMutationEffects(root, finishedWork, lanes);
-        commitReconciliationEffects(finishedWork, lanes);
+        const prevUpdate = inUpdateViewTransition;
         const isViewTransitionEligible =
           enableViewTransition &&
           includesOnlyViewTransitionEligibleLanes(lanes);
+        const props = finishedWork.memoizedProps;
+        inUpdateViewTransition =
+          isViewTransitionEligible &&
+          getViewTransitionClassName(props.default, props.update) !== 'none';
+        recursivelyTraverseMutationEffects(root, finishedWork, lanes);
+        commitReconciliationEffects(finishedWork, lanes);
         if (isViewTransitionEligible) {
           if (current === null) {
             // This is a new mount. We should have handled this as part of the
@@ -2533,6 +2562,7 @@ function commitMutationEffectsOnFiber(
             finishedWork.flags |= Update;
           }
         }
+        inUpdateViewTransition = prevUpdate;
         popMutationContext(prevMutationContext);
         break;
       }
@@ -2710,6 +2740,7 @@ function commitAfterMutationEffectsOnFiber(
   switch (finishedWork.tag) {
     case HostRoot: {
       viewTransitionContextChanged = false;
+      rootViewTransitionNameCanceled = false;
       pushViewTransitionCancelableScope();
       recursivelyTraverseAfterMutationEffects(root, finishedWork, lanes);
       if (!viewTransitionContextChanged && !rootViewTransitionAffected) {
@@ -2728,6 +2759,7 @@ function commitAfterMutationEffectsOnFiber(
         }
         // We also cancel the root itself.
         cancelRootViewTransitionName(root.containerInfo);
+        rootViewTransitionNameCanceled = true;
       }
       popViewTransitionCancelableScope(null);
       break;
@@ -2745,6 +2777,8 @@ function commitAfterMutationEffectsOnFiber(
         // Ideally we would track which React ViewTransition component nests the container
         // but that's costly. Instead, we treat each Portal as if it's a new React root.
         // Therefore any leaked resize of a child could affect the root so the root should animate.
+        // We only do this if the Portal is inside a ViewTransition and it is not disabled
+        // with update="none". Otherwise the Portal is considered not animating.
         rootViewTransitionAffected = true;
       }
       viewTransitionContextChanged = prevContextChanged;
@@ -3457,6 +3491,7 @@ function commitPassiveMountOnFiber(
   const prevEffectStart = pushComponentEffectStart();
   const prevEffectDuration = pushComponentEffectDuration();
   const prevEffectErrors = pushComponentEffectErrors();
+  const prevDeepEquality = pushDeepEquality();
 
   const isViewTransitionEligible = enableViewTransition
     ? includesOnlyViewTransitionEligibleLanes(committedLanes)
@@ -3501,6 +3536,7 @@ function commitPassiveMountOnFiber(
           ((finishedWork.actualStartTime: any): number),
           endTime,
           inHydratedSubtree,
+          committedLanes,
         );
       }
 
@@ -3545,6 +3581,7 @@ function commitPassiveMountOnFiber(
             ((finishedWork.actualStartTime: any): number),
             endTime,
             inHydratedSubtree,
+            committedLanes,
           );
         }
       }
@@ -3584,7 +3621,7 @@ function commitPassiveMountOnFiber(
       }
 
       if (isViewTransitionEligible) {
-        if (supportsMutation) {
+        if (supportsMutation && rootViewTransitionNameCanceled) {
           restoreRootViewTransitionName(finishedRoot.containerInfo);
         }
       }
@@ -4047,6 +4084,7 @@ function commitPassiveMountOnFiber(
   popComponentEffectStart(prevEffectStart);
   popComponentEffectDuration(prevEffectDuration);
   popComponentEffectErrors(prevEffectErrors);
+  popDeepEquality(prevDeepEquality);
 }
 
 function recursivelyTraverseReconnectPassiveEffects(
@@ -4108,6 +4146,8 @@ export function reconnectPassiveEffects(
   const prevEffectStart = pushComponentEffectStart();
   const prevEffectDuration = pushComponentEffectDuration();
   const prevEffectErrors = pushComponentEffectErrors();
+  const prevDeepEquality = pushDeepEquality();
+
   // If this component rendered in Profiling mode (DEV or in Profiler component) then log its
   // render time. We do this after the fact in the passive effect to avoid the overhead of this
   // getting in the way of the render characteristics and avoid the overhead of unwinding
@@ -4124,6 +4164,7 @@ export function reconnectPassiveEffects(
       ((finishedWork.actualStartTime: any): number),
       endTime,
       inHydratedSubtree,
+      committedLanes,
     );
   }
 
@@ -4308,6 +4349,7 @@ export function reconnectPassiveEffects(
   popComponentEffectStart(prevEffectStart);
   popComponentEffectDuration(prevEffectDuration);
   popComponentEffectErrors(prevEffectErrors);
+  popDeepEquality(prevDeepEquality);
 }
 
 function recursivelyTraverseAtomicPassiveEffects(
@@ -4357,6 +4399,8 @@ function commitAtomicPassiveEffects(
   committedTransitions: Array<Transition> | null,
   endTime: number, // Profiling-only. The start time of the next Fiber or root completion.
 ) {
+  const prevDeepEquality = pushDeepEquality();
+
   // If this component rendered in Profiling mode (DEV or in Profiler component) then log its
   // render time. A render can happen even if the subtree is offscreen.
   if (
@@ -4371,6 +4415,7 @@ function commitAtomicPassiveEffects(
       ((finishedWork.actualStartTime: any): number),
       endTime,
       inHydratedSubtree,
+      committedLanes,
     );
   }
 
@@ -4421,6 +4466,8 @@ function commitAtomicPassiveEffects(
       break;
     }
   }
+
+  popDeepEquality(prevDeepEquality);
 }
 
 export function commitPassiveUnmountEffects(finishedWork: Fiber): void {
