@@ -188,6 +188,7 @@ export type ReactCallSite = [
   number, // column number
   number, // enclosing line number
   number, // enclosing column number
+  boolean, // async resume
 ];
 
 export type ReactStackTrace = Array<ReactCallSite>;
@@ -209,6 +210,7 @@ export type ReactComponentInfo = {
   // Stashed Data for the Specific Execution Environment. Not part of the transport protocol
   +debugStack?: null | Error,
   +debugTask?: null | ConsoleTask,
+  debugLocation?: null | Error,
 };
 
 export type ReactEnvironmentInfo = {
@@ -229,12 +231,28 @@ export type ReactErrorInfoDev = {
 
 export type ReactErrorInfo = ReactErrorInfoProd | ReactErrorInfoDev;
 
-export type ReactAsyncInfo = {
-  +type: string,
+// The point where the Async Info started which might not be the same place it was awaited.
+export type ReactIOInfo = {
+  +name: string, // the name of the async function being called (e.g. "fetch")
+  +start: number, // the start time
+  +end: number, // the end time (this might be different from the time the await was unblocked)
+  +value?: null | Promise<mixed>, // the Promise that was awaited if any, may be rejected
+  +env?: string, // the environment where this I/O was spawned.
+  +owner?: null | ReactComponentInfo,
+  +stack?: null | ReactStackTrace,
   // Stashed Data for the Specific Execution Environment. Not part of the transport protocol
   +debugStack?: null | Error,
   +debugTask?: null | ConsoleTask,
+};
+
+export type ReactAsyncInfo = {
+  +awaited: ReactIOInfo,
+  +env?: string, // the environment where this was awaited. This might not be the same as where it was spawned.
+  +owner?: null | ReactComponentInfo,
   +stack?: null | ReactStackTrace,
+  // Stashed Data for the Specific Execution Environment. Not part of the transport protocol
+  +debugStack?: null | Error,
+  +debugTask?: null | ConsoleTask,
 };
 
 export type ReactTimeInfo = {
@@ -289,6 +307,42 @@ export type SuspenseProps = {
   unstable_expectedLoadTime?: number,
   name?: string,
 };
+
+export type SuspenseListRevealOrder =
+  | 'forwards'
+  | 'backwards'
+  | 'unstable_legacy-backwards'
+  | 'together'
+  | 'independent'
+  | void;
+
+export type SuspenseListTailMode = 'visible' | 'collapsed' | 'hidden' | void;
+
+// A SuspenseList row cannot include a nested Array since it's an easy mistake to not realize it
+// is treated as a single row. A Fragment can be used to intentionally have multiple children as
+// a single row.
+type SuspenseListRow = Exclude<
+  ReactNodeList,
+  Iterable<React$Node> | AsyncIterable<React$Node>,
+>;
+
+type DirectionalSuspenseListProps = {
+  // Directional SuspenseList are defined by an array of children or multiple slots to JSX
+  // It does not allow a single element child.
+  children?: Iterable<SuspenseListRow> | AsyncIterable<SuspenseListRow>, // Note: AsyncIterable is experimental.
+  revealOrder: 'forwards' | 'backwards' | 'unstable_legacy-backwards',
+  tail?: SuspenseListTailMode,
+};
+
+type NonDirectionalSuspenseListProps = {
+  children?: ReactNodeList,
+  revealOrder?: 'independent' | 'together' | void,
+  tail?: void,
+};
+
+export type SuspenseListProps =
+  | DirectionalSuspenseListProps
+  | NonDirectionalSuspenseListProps;
 
 export type TracingMarkerProps = {
   name: string,
