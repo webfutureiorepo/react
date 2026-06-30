@@ -14,7 +14,7 @@
     "directory": "compiler/packages/react-forgive"
   },
   "dependencies": {
-    "@babel/core": "^7.26.0",
+    "@babel/core": "^7.29.6",
     "@babel/parser": "^7.26.0",
     "@babel/plugin-syntax-typescript": "^7.25.9",
     "@babel/types": "^7.26.0",
